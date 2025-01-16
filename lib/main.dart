@@ -43,7 +43,7 @@ class MyHomePage extends StatefulWidget {
 Map<String, dynamic>? s3CfgCache = null;
 
 Future<KvStorage> getS3Database() async {
-  const configFileUrl = "http://sq4vzrgad.hd-bkt.clouddn.com/config.json";
+  const configFileUrl = "http://sq4vzrgad.hd-bkt.clouddn.com/config-v1.json";
   if (s3CfgCache == null) {
     final cfgResp = await Dio().get<Map<String, dynamic>>(configFileUrl);
     s3CfgCache = cfgResp.data!;
