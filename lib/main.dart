@@ -24,18 +24,8 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: FutureBuilder(
-        future: getS3Database(),
-        builder: (context, snapshot) {
-          if (snapshot.hasData) {
-            return MyHomePage(
-              title: '猜本本',
-              db: snapshot.data!,
-            );
-          } else {
-            return CircularProgressIndicator();
-          }
-        },
+      home: MyHomePage(
+        title: '猜本本',
       ),
       builder: EasyLoading.init(),
     );
@@ -43,18 +33,17 @@ class MyApp extends StatelessWidget {
 }
 
 class MyHomePage extends StatefulWidget {
-  final KvStorage db;
-  const MyHomePage({super.key, required this.title, required this.db});
+  const MyHomePage({super.key, required this.title});
   final String title;
 
   @override
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-const configFileUrl = "http://sq4vzrgad.hd-bkt.clouddn.com/config.json";
-
 Map<String, dynamic>? s3CfgCache = null;
+
 Future<KvStorage> getS3Database() async {
+  const configFileUrl = "http://sq4vzrgad.hd-bkt.clouddn.com/config.json";
   if (s3CfgCache == null) {
     final cfgResp = await Dio().get<Map<String, dynamic>>(configFileUrl);
     s3CfgCache = cfgResp.data!;
@@ -73,20 +62,41 @@ Future<KvStorage> getS3Database() async {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  final totalTimeRange = getTimeRange().map((x) => "[${x.$1},${x.$2})");
-  late final hitsMap = HashMap<String, List<String>>.fromEntries(
+  final totalTimeRange = getTimeRange();
+  late final hitsMap = HashMap<(String, String), List<String>>.fromEntries(
     totalTimeRange.map((x) => MapEntry(x, [])),
   );
+  bool loaded = false;
+  late final KvStorage db;
   late final betTable = NamespaceStorage(
-    widget.db,
+    db,
     namespace: "bet/${todayDate()}/",
   );
+
+  String genTitle((String, String) x) {
+    return "[${x.$1},${x.$2})";
+  }
+
+  (String, String) parseTitle(String x) {
+    // 去掉开头和结尾的字符
+    String trimmed = x.substring(1, x.length - 1);
+
+    // 按逗号分割
+    List<String> parts = trimmed.split(',');
+
+    // 返回解析后的元组
+    return (parts[0], parts[1]);
+  }
 
   @override
   void initState() {
     super.initState();
+    () async {
+      db = await getS3Database();
+      await refresh();
+      loaded = true;
+    }();
     Timer.periodic(Duration(seconds: 10), (t) => refresh());
-    refresh();
   }
 
   Future<void> refresh() async {
@@ -97,7 +107,7 @@ class _MyHomePageState extends State<MyHomePage> {
         keys.map((k) => betTable.getText(k).then((x) => x ?? "[]")));
     for (var i = 0; i < keys.length; i++) {
       final key = String.fromCharCodes(HexUtils.decode(keys[i]));
-      hitsMap[key] = (jsonDecode(values[i]) as List<dynamic>)
+      hitsMap[parseTitle(key)] = (jsonDecode(values[i]) as List<dynamic>)
           .map((x) => x as String)
           .toList();
     }
@@ -120,7 +130,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return ret ?? "";
   }
 
-  Future<void> _showHitsPeople(String x) async {
+  Future<void> _showHitsPeople((String, String) x) async {
     await showDialog(
       context: context,
       builder: (context) {
@@ -134,22 +144,81 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!loaded) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              Text("正在加载..."),
+            ],
+          ),
+        ),
+      );
+    }
     final ordered = totalTimeRange.toList();
     ordered.sort((a, b) {
       return (hitsMap[b]?.length ?? 0).compareTo(hitsMap[a]?.length ?? 0);
     });
     return Scaffold(
       appBar: AppBar(
+        leading: Image.asset("assets/favicon.png"),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.info),
+            onPressed: () {
+              showAboutDialog(
+                context: context,
+                applicationName: "猜本本",
+                applicationVersion: "1.0.0",
+                applicationIcon: Image.asset("assets/favicon.png"),
+                children: [
+                  Text("一个猜本本老师什么时候起床的押注程序"),
+                ],
+              );
+            },
+          ),
+        ],
       ),
       body: ListView(
         children: ordered.map((x) {
-          final b64Title = HexUtils.encode(x.codeUnits);
+          final title = genTitle(x);
+          final b64Title = HexUtils.encode(title.codeUnits);
+          final range = parseTitle(title);
+          final now = currentTime();
+          final currentPos = checkTimePosition(now, range);
           return Column(
             children: [
               ListTile(
-                title: Text(x),
+                title: Row(children: [
+                  Text(title),
+                  SizedBox(
+                    width: 30,
+                  ),
+                  () {
+                    switch (currentPos) {
+                      case TimePosition.Before:
+                        return Text(
+                          "即将揭晓",
+                          style: TextStyle(color: Colors.green),
+                        );
+                      case TimePosition.Within:
+                        return Text(
+                          "当前时间",
+                          style: TextStyle(color: Colors.blue),
+                        );
+                      case TimePosition.After:
+                        return Text(
+                          "已过期",
+                          style: TextStyle(color: Colors.red),
+                        );
+                    }
+                  }(),
+                ]),
                 subtitle: Row(
                   children: [
                     Text("当前押注人数: ${hitsMap[x]!.length}"),
@@ -163,56 +232,60 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                   ],
                 ),
-                trailing: ElevatedButton(
-                  onPressed: () async {
-                    final name = await _showInputDialog();
-                    if (name == "") {
-                      EasyLoading.showError("昵称输入有误");
-                      return;
-                    }
+                trailing: currentPos == TimePosition.After
+                    ? null
+                    : ElevatedButton(
+                        onPressed: () async {
+                          final name = await _showInputDialog();
+                          if (name == "") {
+                            EasyLoading.showError("昵称输入有误");
+                            return;
+                          }
 
-                    final clickStr = await betTable.getText(b64Title);
-                    final clickPeople =
-                        (jsonDecode(clickStr ?? "[]") as List<dynamic>)
-                            .map((x) => x as String)
-                            .toList();
+                          final clickStr = await betTable.getText(b64Title);
+                          final clickPeople =
+                              (jsonDecode(clickStr ?? "[]") as List<dynamic>)
+                                  .map((x) => x as String)
+                                  .toList();
 
-                    clickPeople.add("押注时间: ${currentTime()}  押注人员: ${name}");
-                    debugPrint(jsonEncode(clickPeople));
-                    await betTable.setText(b64Title, jsonEncode(clickPeople));
+                          clickPeople
+                              .add("押注时间: ${currentTime()}  押注人员: ${name}");
+                          debugPrint(jsonEncode(clickPeople));
+                          await betTable.setText(
+                              b64Title, jsonEncode(clickPeople));
 
-                    EasyLoading.show(
-                      status: '正在押注...',
-                      maskType: EasyLoadingMaskType.black,
-                    );
-                    await Future.delayed(Duration(milliseconds: 300));
-                    for (var i = 1; i <= 10; i++) {
-                      // 检查云端是否刷新成功
-                      if (await betTable.getText(b64Title) != clickStr) {
-                        // 只要数据发生变更，认为成功
-                        await refresh();
-                        EasyLoading.dismiss();
-                        EasyLoading.showToast(
-                          '押注成功',
-                          toastPosition: EasyLoadingToastPosition.bottom,
-                        );
-                        return;
-                      }
-                      EasyLoading.show(
-                        status: '正在押注(当前尝试$i/10次)...',
-                        maskType: EasyLoadingMaskType.black,
-                      );
-                      await Future.delayed(Duration(seconds: 1));
-                    }
-                    await refresh();
-                    EasyLoading.dismiss();
-                    EasyLoading.showToast(
-                      '押注失败, 请重试',
-                      toastPosition: EasyLoadingToastPosition.bottom,
-                    );
-                  },
-                  child: Text("点击押注"),
-                ),
+                          EasyLoading.show(
+                            status: '正在押注...',
+                            maskType: EasyLoadingMaskType.black,
+                          );
+                          await Future.delayed(Duration(milliseconds: 300));
+                          for (var i = 1; i <= 10; i++) {
+                            // 检查云端是否刷新成功
+                            if (await betTable.getText(b64Title) != clickStr) {
+                              // 只要数据发生变更，认为成功
+                              await refresh();
+                              EasyLoading.dismiss();
+                              EasyLoading.showToast(
+                                '押注成功',
+                                toastPosition: EasyLoadingToastPosition.bottom,
+                              );
+                              return;
+                            }
+                            EasyLoading.show(
+                              status: '正在押注(当前尝试$i/10次)...',
+                              maskType: EasyLoadingMaskType.black,
+                            );
+                            await Future.delayed(Duration(seconds: 1));
+                          }
+                          await refresh();
+                          EasyLoading.dismiss();
+                          EasyLoading.showToast(
+                            '押注失败, 请重试',
+                            toastPosition: EasyLoadingToastPosition.bottom,
+                          );
+                        },
+                        child: Text("点击押注"),
+                      ),
               ),
               Divider(
                 // 手动添加 Divider

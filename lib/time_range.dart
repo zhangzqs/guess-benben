@@ -10,7 +10,7 @@ String todayDate() {
 String currentTime() {
   DateTime now = DateTime.now();
   DateTime utcPlus8 = now.toUtc().add(Duration(hours: 8));
-  String formattedDate = DateFormat('HH:mm:ss').format(utcPlus8);
+  String formattedDate = DateFormat('HH:mm').format(utcPlus8);
   return formattedDate;
 }
 
@@ -29,4 +29,30 @@ List<(String, String)> getTimeRange() {
     ret.add((beginTime, endTime));
   }
   return ret;
+}
+
+enum TimePosition { Before, Within, After }
+
+TimePosition checkTimePosition(String t, (String, String) range) {
+// 辅助函数：将 "HH:mm" 转换为分钟数
+  int timeToMinutes(String time) {
+    List<String> parts = time.split(':');
+    int hours = int.parse(parts[0]);
+    int minutes = int.parse(parts[1]);
+    return hours * 60 + minutes;
+  }
+
+  // 将时间字符串转换为分钟数
+  int timeMinutes = timeToMinutes(t);
+  int startMinutes = timeToMinutes(range.$1);
+  int endMinutes = timeToMinutes(range.$2);
+
+  // 判断时间位置
+  if (timeMinutes < startMinutes) {
+    return TimePosition.Before;
+  } else if (timeMinutes >= startMinutes && timeMinutes < endMinutes) {
+    return TimePosition.Within;
+  } else {
+    return TimePosition.After;
+  }
 }
